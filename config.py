@@ -5,21 +5,21 @@
 import os
 
 # ---------------------------------------------------------------------------
-# The Odds API
+# OddsPapi API
 # ---------------------------------------------------------------------------
-API_KEY = os.getenv("ODDS_API_KEY", "YOUR_API_KEY_HERE")
-BASE_URL = "https://api.the-odds-api.com/v4"
+API_KEY = os.getenv("ODDS_API_KEY", "3c1341eb-a528-41d3-9ded-ac4dc64dd3dd")
+BASE_URL = "https://api.oddspapi.io/v4"
 
-# Sports to monitor.  Add / remove from this list freely.
+# Sports to monitor — matched against sport names returned by the API.
+# These are search terms; the fetcher will find the correct sport IDs
+# automatically on startup.
 SPORTS = [
-    "basketball_nba",
-    "icehockey_nhl",
-    "americanfootball_nfl",
+    "basketball",   # NBA
+    "ice hockey",   # NHL
+    "american football",  # NFL
 ]
 
-REGIONS = "us"
-MARKETS = "h2h,spreads,totals"
-ODDS_FORMAT = "american"
+ODDS_FORMAT = "american"   # decimal | american
 
 # ---------------------------------------------------------------------------
 # Database

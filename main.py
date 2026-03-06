@@ -32,10 +32,16 @@ logger = logging.getLogger("main")
 
 def run_pipeline() -> None:
     logger.info("=== Pipeline start ===")
+    from odds_fetcher import get_sport_ids
     all_rows: list[dict] = []
 
-    for sport in config.SPORTS:
-        rows = fetch_and_flatten(sport)
+    sport_ids = get_sport_ids()
+    if not sport_ids:
+        logger.error("Could not resolve any sport IDs — check API key and connection.")
+        return
+
+    for sport_label, sport_id in sport_ids.items():
+        rows = fetch_and_flatten(sport_label, sport_id)
         if rows:
             db.insert_snapshot(rows)
             all_rows.extend(rows)
