@@ -1,0 +1,20 @@
+# Database
+*.db
+*.db-shm
+*.db-wal
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Environment / secrets
+.env
+*.env
+
+# Streamlit cache
+.streamlit/cache/
+
+# OS
+.DS_Store
+Thumbs.db
