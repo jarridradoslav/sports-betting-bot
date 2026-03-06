@@ -11,6 +11,8 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+import time
+
 import requests
 
 import config
@@ -23,7 +25,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _session = requests.Session()
-_session.params = {"apiKey": config.API_KEY, "oddsFormat": config.ODDS_FORMAT}  # type: ignore
+_session.params = {"apiKey": config.API_KEY}  # type: ignore
 
 # Market name normalisation — map OddsPapi market names → our internal names
 MARKET_MAP = {
@@ -47,21 +49,42 @@ def _normalise_market(raw: str) -> Optional[str]:
 # Step 1 — fetch all sports and find IDs matching our config
 # ---------------------------------------------------------------------------
 
+_cached_sport_ids: dict[str, int] = {}
+
+
 def get_sport_ids() -> dict[str, int]:
     """
     Return {sport_label: sport_id} for every sport in config.SPORTS.
-    Matches by checking if the config label appears in the API sport name.
+    Result is cached for the lifetime of the process so we only hit the
+    endpoint once.
     """
+    global _cached_sport_ids
+    if _cached_sport_ids:
+        return _cached_sport_ids
+
     url = f"{config.BASE_URL}/sports"
-    try:
-        resp = _session.get(url, timeout=15)
-        resp.raise_for_status()
-        sports_data = resp.json()
-    except Exception as exc:
-        logger.error("Failed to fetch sports list: %s", exc)
+    for attempt in range(4):
+        try:
+            resp = _session.get(url, timeout=15)
+            if resp.status_code == 429:
+                wait = 3.0
+                try:
+                    wait = float(resp.json()["error"].get("retryMs", 3000)) / 1000 + 0.5
+                except Exception:
+                    pass
+                logger.info("Rate limited on /sports — waiting %.1fs", wait)
+                time.sleep(wait)
+                continue
+            resp.raise_for_status()
+            sports_data = resp.json()
+            break
+        except requests.HTTPError as exc:
+            logger.error("Failed to fetch sports list: %s", exc)
+            return {}
+    else:
+        logger.error("Failed to fetch sports list after retries")
         return {}
 
-    # sports_data may be a list or wrapped in a 'data' key
     if isinstance(sports_data, dict):
         sports_data = sports_data.get("data", sports_data.get("sports", []))
 
@@ -76,6 +99,7 @@ def get_sport_ids() -> dict[str, int]:
                 result[label] = int(sid)
                 logger.info("Mapped '%s' → sport_id=%s (%s)", label, sid, name)
 
+    _cached_sport_ids = result
     return result
 
 
@@ -87,12 +111,11 @@ def get_fixtures(sport_id: int) -> list[dict]:
     """Return upcoming fixtures for a sport ID (next 7 days)."""
     url = f"{config.BASE_URL}/fixtures"
     today     = datetime.now(timezone.utc).date()
-    week_out  = today + timedelta(days=7)
+    week_out  = today + timedelta(days=2)
     params = {
-        "sportId":  sport_id,
-        "fromDate": today.isoformat(),
-        "toDate":   week_out.isoformat(),
-        "statusId": 0,   # pending (not yet started)
+        "sportId": sport_id,
+        "from":    today.isoformat(),
+        "to":      week_out.isoformat(),
     }
     try:
         resp = _session.get(url, params=params, timeout=15)
@@ -113,20 +136,39 @@ def get_fixtures(sport_id: int) -> list[dict]:
 # Step 3 — fetch odds for a single fixture
 # ---------------------------------------------------------------------------
 
-def get_odds(fixture_id: int | str) -> Optional[dict]:
-    """Return raw odds payload for one fixture."""
+def get_odds(fixture_id: int | str, retries: int = 3) -> Optional[dict]:
+    """Return raw odds payload for one fixture, with rate-limit retry."""
     url = f"{config.BASE_URL}/odds"
-    try:
-        resp = _session.get(url, params={"fixtureId": fixture_id}, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as exc:
-        logger.error("Failed to fetch odds for fixture_id=%s: %s", fixture_id, exc)
-        return None
-
-    if isinstance(data, dict) and "data" in data:
-        return data["data"]
-    return data
+    for attempt in range(retries):
+        try:
+            resp = _session.get(
+                url,
+                params={"fixtureId": fixture_id, "oddsFormat": config.ODDS_FORMAT},
+                timeout=15,
+            )
+            if resp.status_code == 429:
+                # Read the retryAfter value from the error body
+                wait = 2.0
+                try:
+                    wait = float(resp.json()["error"].get("retryMs", 2000)) / 1000 + 0.2
+                except Exception:
+                    pass
+                logger.debug("Rate limited on fixture %s — waiting %.1fs", fixture_id, wait)
+                time.sleep(wait)
+                continue
+            resp.raise_for_status()
+            data = resp.json()
+            if isinstance(data, dict) and "data" in data:
+                return data["data"]
+            return data
+        except requests.HTTPError as exc:
+            logger.error("Failed to fetch odds for fixture_id=%s: %s", fixture_id, exc)
+            return None
+        except Exception as exc:
+            logger.error("Failed to fetch odds for fixture_id=%s: %s", fixture_id, exc)
+            return None
+    logger.warning("Gave up on fixture_id=%s after %d retries", fixture_id, retries)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -239,6 +281,7 @@ def fetch_and_flatten(sport_label: str, sport_id: int) -> list[dict]:
         odds_payload = get_odds(fid)
         if not odds_payload:
             continue
+        time.sleep(0.5)   # respect rate limit between fixture calls
 
         # Log the raw payload once per run to help debug response structure
         if not logged_sample:

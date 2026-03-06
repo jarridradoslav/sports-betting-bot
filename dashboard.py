@@ -39,8 +39,8 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-    /* Tighten default padding */
-    .block-container { padding-top: 1.5rem; padding-bottom: 1rem; }
+    /* Push content below Streamlit's top toolbar */
+    .block-container { padding-top: 4rem; padding-bottom: 1rem; }
 
     /* Metric cards */
     [data-testid="metric-container"] {
